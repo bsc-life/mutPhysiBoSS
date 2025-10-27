@@ -232,12 +232,12 @@
                     </transformation_rates>
                 </cell_transformations>
                 <intracellular type="maboss">
-                    <bnd_filename>./config/model_0.bnd</bnd_filename>
-                    <cfg_filename>./config/model.cfg</cfg_filename>
+                    <bnd_filename>./config/sizek_curated_BN/intracellular_model.bnd</bnd_filename>
+                    <cfg_filename>./config/sizek_curated_BN/intracellular_model.cfg</cfg_filename>
                     <initial_values>
-                        <initial_value intracellular_name="A">0</initial_value>
-                        <initial_value intracellular_name="B">0</initial_value>
-                        <initial_value intracellular_name="C">0</initial_value>
+                        <initial_value intracellular_name="S_entry">0</initial_value>
+                        <initial_value intracellular_name="G2M_entry">0</initial_value>
+                        <initial_value intracellular_name="G0G1_entry">0</initial_value>
                     </initial_values>
                     <settings>
                         <intracellular_dt>10</intracellular_dt>
@@ -265,13 +265,13 @@
     <initial_conditions>
         <cell_positions enabled="true" type="csv">
             <folder>./config</folder>
-            <filename>posiciones.csv</filename>
+            <filename>posiciones_1cell.csv</filename>
         </cell_positions>
     </initial_conditions>
 
     <user_parameters>
         <random_seed type="int" units="dimensionless" description="">0</random_seed>
-        <node_to_visualize type="string" units="" description="">C</node_to_visualize>
+        <node_to_visualize type="string" units="" description="">S_entry</node_to_visualize>
         <mutation_rate_threshold type="double" units="" description="">0.02</mutation_rate_threshold>
     </user_parameters>
 </PhysiCell_settings>

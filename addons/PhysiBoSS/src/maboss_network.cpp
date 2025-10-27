@@ -94,12 +94,20 @@ void MaBoSSNetwork::set_parameters(std::map<std::string, double> parameters)
 
 double MaBoSSNetwork::get_parameter_value(std::string name) 
 {
+	if (parametersByName.find(name) == parametersByName.end()) {
+		std::cerr << "Warning: Parameter " << name << " not found in network. Returning 0.0." << std::endl;
+		return 0.0;
+	}
 	return network->getSymbolTable()->getSymbolValue(parametersByName[name]);
 }
 
 
 void MaBoSSNetwork::set_parameter_value(std::string name, double value) 
 {
+	if (parametersByName.find(name) == parametersByName.end()) {
+		std::cerr << "Warning: Parameter " << name << " not found in network. Cannot set value." << std::endl;
+		return;
+	}
 	network->getSymbolTable()->setSymbolValue(parametersByName[name], value);
 	network->getSymbolTable()->unsetSymbolExpressions();
 }

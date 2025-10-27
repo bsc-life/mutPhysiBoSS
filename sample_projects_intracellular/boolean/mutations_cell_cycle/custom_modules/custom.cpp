@@ -183,11 +183,12 @@ void setup_tissue( void )
 
 void pre_update_intracellular( Cell* pCell, Phenotype& phenotype, double dt )
 {
-	if (PhysiCell::PhysiCell_globals.current_time >= 100.0 
-		&& pCell->phenotype.intracellular->get_parameter_value("$time_scale") == 0.0
-	){
-		pCell->phenotype.intracellular->set_parameter_value("$time_scale", 0.1);
-	}
+	// Commented out to avoid crash - parameter "$time_scale" doesn't exist in the network -- SHOULD BE FIXED
+	// if (PhysiCell::PhysiCell_globals.current_time >= 100.0 
+	// 	&& pCell->phenotype.intracellular->get_parameter_value("$time_scale") == 0.0
+	// ){
+	// 	pCell->phenotype.intracellular->set_parameter_value("$time_scale", 0.1);
+	// }
 
 }
 
@@ -200,7 +201,7 @@ void post_update_intracellular( Cell* pCell, Phenotype& phenotype, double dt )
 	// std::cout << "Cell " << pCell->ID << " generation " << pCell->generation << " parent " << pCell->parent_ID << std::endl;
 
 	// ADD NODE C RESISTANCE
-	update_cell_from_boolean_model(pCell, phenotype, dt);
+	// update_cell_from_boolean_model(pCell, phenotype, dt);
 	
 }
 
@@ -210,7 +211,9 @@ void update_cell_from_boolean_model(Cell* pCell, Phenotype& phenotype, double dt
 	static int apoptosis_index = phenotype.death.find_death_model_index( PhysiCell_constants::apoptosis_death_model );
 	static float apoptosis_rate = pCell->custom_data["apoptosis_rate"];
 	static float death_commitment_decay = pCell->custom_data["death_decay_idx"];
-	bool C_node = pCell->phenotype.intracellular->get_boolean_variable_value( "C" );
+	bool S_entry_node = pCell->phenotype.intracellular->get_boolean_variable_value( "S_entry" );
+	bool G2M_entry_node = pCell->phenotype.intracellular->get_boolean_variable_value( "G2M_entry" );
+	bool G0G1_entry_node = pCell->phenotype.intracellular->get_boolean_variable_value( "G0G1_entry" );
 
 	static int density_idx = microenvironment.find_density_index("drug");
 	double drug_density_ext = pCell->nearest_density_vector()[density_idx]; // A density (mM)
@@ -223,15 +226,14 @@ void update_cell_from_boolean_model(Cell* pCell, Phenotype& phenotype, double dt
 
 
 
-	if ( C_node )
+	if ( S_entry_node || G2M_entry_node || G0G1_entry_node )
 	{
 		pCell-> phenotype.death.rates[apoptosis_index] = basal_apoptosis;
-
-	} else {
-
+	}
+	else
+	{
 		pCell-> phenotype.death.rates[apoptosis_index] = final_apoptosis_rate;
 	}
-
 
 	return;
 }
@@ -314,7 +316,9 @@ void phase_exit_mutation_function( Cell* pCell, Phenotype& phenotype, double dt 
 				size_t node_idx = node_dist(generator);
 				std::string node_name = node_names[node_idx];
 
-				if (node_name == "A" || node_name == "B"){
+				// This is where we list the nodes that we want to mutate
+
+				if (node_name == "S_entry" || node_name == "G2M_entry" || node_name == "G0G1_entry"){
 
 					// Flip its value
 					bool current_value = maboss_model->maboss.get_node_value(node_name);
