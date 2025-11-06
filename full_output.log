@@ -1,0 +1,65 @@
+Using config file ./config/PhysiCell_settings.xml ... 
+Disabling automated spring adhesions and detachments!
+Using system clock for random seed
+Setting up RNG with seed 1136950809
+1
+dc? 1
+User parameters in XML config file: 
+Bool parameters:: 
+
+Int parameters:: 
+random_seed: 0 [dimensionless]
+
+Double parameters:: 
+mutation_rate_threshold: 0.02 [dimensionless]
+
+String parameters:: 
+node_to_visualize: S_entry [dimensionless]
+
+
+which boundaries?
+1 1 1 1 1 1
+
+Microenvironment summary: microenvironment: 
+
+Mesh information: 
+type: uniform Cartesian
+Domain: [-200,200] micron x [-200,200] micron x [-5,5] micron
+   resolution: dx = 10 micron
+   voxels: 1600
+   voxel faces: 0
+   volume: 1.6e+06 cubic micron
+Densities: (3 total)
+   oxygen:
+     units: dimensionless
+     diffusion coefficient: 100000 micron^2 / min
+     decay rate: 0.1 min^-1
+     diffusion length scale: 1000 micron
+     initial condition: 38 dimensionless
+     boundary condition: 38 dimensionless (enabled: false)
+   drug:
+     units: dimensionless
+     diffusion coefficient: 1000 micron^2 / min
+     decay rate: 0.1 min^-1
+     diffusion length scale: 100 micron
+     initial condition: 1000 dimensionless
+     boundary condition: 0 dimensionless (enabled: false)
+   GF:
+     units: mM
+     diffusion coefficient: 100000 micron^2 / min
+     decay rate: 0.1 min^-1
+     diffusion length scale: 1000 micron
+     initial condition: 0 mM
+     boundary condition: 0 mM (enabled: false)
+
+WARNING: Setting the random seed again.
+	You probably have set a user parameter called random_seed.
+	Here, we will use the random seed set in user parameters.
+	HOWEVER, as of PhysiCell 1.14.0, you should set the random seed in the <options><random_seed> element in the config file.
+	Future versions of PhysiCell may throw an error here. Kindly remove the user parameter and just use the <options><random_seed> element.
+Setting up RNG with seed 0
+Pre-processing type 0 named default
+Processing default ... 
+Note: setting cell definition to 2D based on microenvironment domain settings ... 
+  --------- attachment_elastic_constant = 0.01
+terminate called after throwing an instance of 'BNException'

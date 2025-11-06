@@ -34,10 +34,22 @@ void MaBoSSNetwork::init_maboss( std::string networkFile, std::string configFile
 			
 			// Initialize MaBoSS Objects for a model
 			this->network = new Network();
-			this->network->parse(networkFile.c_str());
+			try {
+				this->network->parse(networkFile.c_str());
+			} catch (BNException& e) {
+				std::cerr << "MaBoSS ERROR parsing BND file: " << e.getMessage() << std::endl;
+				std::cerr.flush();
+				throw;
+			}
 
 			this->config = new RunConfig();
-			this->config->parse(this->network, configFile.c_str());
+			try {
+				this->config->parse(this->network, configFile.c_str());
+			} catch (BNException& e) {
+				std::cerr << "MaBoSS ERROR parsing CFG file: " << e.getMessage() << std::endl;
+				std::cerr.flush();
+				throw;
+			}
 		}
 		
 		// Some models will have chosen to use the physical randon number generator 
@@ -50,8 +62,17 @@ void MaBoSSNetwork::init_maboss( std::string networkFile, std::string configFile
 
 		engine = new StochasticSimulationEngine(this->network, this->config, PhysiCell::UniformInt());
 	
-	} catch (BNException e) {
+	} catch (BNException& e) {
 		std::cerr << "MaBoSS ERROR : " << e.getMessage() << std::endl;
+		std::cerr.flush();
+		exit(1);
+	} catch (std::exception& e) {
+		std::cerr << "MaBoSS ERROR (std::exception): " << e.what() << std::endl;
+		std::cerr.flush();
+		exit(1);
+	} catch (...) {
+		std::cerr << "MaBoSS ERROR : Unknown exception during network parsing" << std::endl;
+		std::cerr.flush();
 		exit(1);
 	}
 	this->update_time_step = this->config->getMaxTime();
