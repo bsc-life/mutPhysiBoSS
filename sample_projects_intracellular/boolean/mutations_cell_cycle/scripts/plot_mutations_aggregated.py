@@ -19,6 +19,15 @@ mpl.rcParams.update({
 
 output_dir = "output"
 
+# Create results directory structure
+script_dir = os.path.dirname(os.path.abspath(__file__))
+results_dir = os.path.join(script_dir, "results")
+aggregated_mutations_dir = os.path.join(results_dir, "aggregated_mutations")
+
+# Create directories if they don't exist
+os.makedirs(aggregated_mutations_dir, exist_ok=True)
+print(f"Results will be saved to: {aggregated_mutations_dir}")
+
 # Extract time index from filename
 def extract_time(filename):
     match = re.search(r'output(\d+)_mut', filename)
@@ -37,6 +46,7 @@ def final_genotype(mutation_str):
     # Sort genes alphabetically for consistency
     final = [f"{gene}_{gene_state[gene]}" for gene in sorted(gene_state.keys())]
     return '.'.join(final)
+
 
 # Read all .mut.csv files
 mut_files = [f for f in os.listdir(output_dir) if f.endswith('mut.csv')]
@@ -90,7 +100,7 @@ if not lineage_df.empty:
               loc="upper left", borderaxespad=0, fontsize=8, title_fontsize=9)
 
     # Save paths
-    base_path = os.path.join(os.path.dirname(__file__), "mutations")
+    base_path = os.path.join(aggregated_mutations_dir, "mutations")
 
     # Full legend
     patch_handles = []
