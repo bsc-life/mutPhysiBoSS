@@ -1,20 +1,20 @@
 <PhysiCell_settings version="devel-version">
 
     <domain>
-        <x_min>-200</x_min>
+        <x_min>-100</x_min>
         <x_max>200</x_max>
-        <y_min>-200</y_min>
-        <y_max>200</y_max>
-        <z_min>-10</z_min>
-        <z_max>10</z_max>
+        <y_min>-100</y_min>
+        <y_max>100</y_max>
+        <z_min>-20</z_min>
+        <z_max>20</z_max>
         <dx>10</dx>
         <dy>10</dy>
         <dz>10</dz>
-        <use_2D>true</use_2D>
+        <use_2D>false</use_2D>
     </domain>
 
     <overall>
-        <max_time units="min">20000</max_time>
+        <max_time units="min">200</max_time>
         <time_units>min</time_units>
         <space_units>micron</space_units>
         <dt_diffusion units="min">0.02</dt_diffusion>
@@ -29,11 +29,11 @@
     <save>
         <folder>output</folder>
         <full_data>
-            <interval units="min">100</interval>
+            <interval units="min">10</interval>
             <enable>true</enable>
         </full_data>
         <SVG>
-            <interval units="min">100</interval>
+            <interval units="min">10</interval>
             <enable>true</enable>
         </SVG>
         <legacy_data>
@@ -48,39 +48,22 @@
     </options>
 
     <microenvironment_setup>
-        <variable name="GF" units="dimensionless" ID="0">
+        <variable name="oxygen" units="dimensionless" ID="0">
             <physical_parameter_set>
                 <diffusion_coefficient units="micron^2/min">100000.0</diffusion_coefficient>
-                <decay_rate units="1/min">0</decay_rate>
-            </physical_parameter_set>
-            <initial_condition units="mM">1.0</initial_condition>
-            <Dirichlet_boundary_condition units="mM" enabled="True">1.0</Dirichlet_boundary_condition>
-            <Dirichlet_options>
-                <boundary_value ID="xmin" enabled="False">1</boundary_value>
-                <boundary_value ID="xmax" enabled="False">1</boundary_value>
-                <boundary_value ID="ymin" enabled="False">1</boundary_value>
-                <boundary_value ID="ymax" enabled="False">1</boundary_value>
-                <boundary_value ID="zmin" enabled="False">1</boundary_value>
-                <boundary_value ID="zmax" enabled="False">1</boundary_value>
-            </Dirichlet_options>
-        </variable>
-        <variable name="oxygen" units="mmHg" ID="1">
-            <physical_parameter_set>
-                <diffusion_coefficient units="micron^2/min">100000.0</diffusion_coefficient>
-                <decay_rate units="1/min">0.0</decay_rate>
+                <decay_rate units="1/min">.1</decay_rate>
             </physical_parameter_set>
             <initial_condition units="mmHg">38.0</initial_condition>
-            <Dirichlet_boundary_condition units="mmHg" enabled="True">38.0</Dirichlet_boundary_condition>
+            <Dirichlet_boundary_condition units="mmHg" enabled="False">38.0</Dirichlet_boundary_condition>
             <Dirichlet_options>
-                <boundary_value ID="xmin" enabled="False">38.0</boundary_value>
-                <boundary_value ID="xmax" enabled="False">38.0</boundary_value>
-                <boundary_value ID="ymin" enabled="False">38.0</boundary_value>
-                <boundary_value ID="ymax" enabled="False">38.0</boundary_value>
-                <boundary_value ID="zmin" enabled="False">38.0</boundary_value>
-                <boundary_value ID="zmax" enabled="False">38.0</boundary_value>
+                <boundary_value ID="xmin" enabled="False">0</boundary_value>
+                <boundary_value ID="xmax" enabled="False">0</boundary_value>
+                <boundary_value ID="ymin" enabled="False">0</boundary_value>
+                <boundary_value ID="ymax" enabled="False">0</boundary_value>
+                <boundary_value ID="zmin" enabled="False">0</boundary_value>
+                <boundary_value ID="zmax" enabled="False">0</boundary_value>
             </Dirichlet_options>
         </variable>
-
         <options>
             <calculate_gradients>true</calculate_gradients>
             <track_internalized_substrates_in_each_agent>true</track_internalized_substrates_in_each_agent>
@@ -96,12 +79,9 @@
     <cell_definitions>
         <cell_definition name="default" ID="0">
             <phenotype>
-                <cycle code="6" name="flow_cytometry_separated_cycle_model">
+                <cycle code="5" name="live_cells_cycle_model">
                     <phase_transition_rates units="1/min">
-                        <rate start_index="0" end_index="1" fixed_duration="false">0.00335</rate>
-                        <rate start_index="1" end_index="2" fixed_duration="false">0.00208</rate>
-                        <rate start_index="2" end_index="3" fixed_duration="false">0.00417</rate>
-                        <rate start_index="3" end_index="0" fixed_duration="false">0.0167</rate>
+                        <rate start_index="0" end_index="0" fixed_duration="false">0.01</rate>
                     </phase_transition_rates>
                 </cycle>
                 <death>
@@ -174,7 +154,7 @@
                     <migration_bias units="dimensionless">0.5</migration_bias>
                     <options>
                         <enabled>false</enabled>
-                        <use_2D>true</use_2D>
+                        <use_2D>false</use_2D>
                         <chemotaxis>
                             <enabled>false</enabled>
                             <substrate>oxygen</substrate>
@@ -195,12 +175,6 @@
                         <secretion_target units="substrate density">38</secretion_target>
                         <uptake_rate units="1/min">10</uptake_rate>
                         <net_export_rate units="total substrate/min">0</net_export_rate>
-                    </substrate>
-                    <substrate name="GF">
-                        <secretion_rate units="1/min">0</secretion_rate>
-                        <secretion_target units="substrate density">0.0</secretion_target>
-                        <uptake_rate units="1/min">0</uptake_rate>
-                        <net_export_rate units="total substrate/min">-1e-15</net_export_rate>
                     </substrate>
                 </secretion>
                 <cell_interactions>
@@ -245,14 +219,12 @@
                     <bnd_filename>./config/sizek_curated_BN/intracellular_model.bnd</bnd_filename>
                     <cfg_filename>./config/sizek_curated_BN/intracellular_model.cfg</cfg_filename>
                     <initial_values>
-                        <initial_value intracellular_name="S_entry">0</initial_value>
-                        <initial_value intracellular_name="G2M_entry">0</initial_value>
-                        <initial_value intracellular_name="G0G1_entry">0</initial_value>
+                        <initial_value intracellular_name="C">0</initial_value>
                     </initial_values>
                     <settings>
-                        <intracellular_dt>0.1</intracellular_dt>
+                        <intracellular_dt>1</intracellular_dt>
                         <time_stochasticity>0.0</time_stochasticity>
-                        <scaling>10000</scaling>
+                        <scaling>1.0</scaling>
                         <start_time>0.0</start_time>
                         <inheritance global="False" />
                     </settings>
@@ -264,10 +236,6 @@
                 <parent_ID conserved="false" units="dimensionless" description="">0.0</parent_ID>
                 <generation conserved="false" units="dimensionless" description="">0.0</generation>
                 <lineage conserved="false" units="dimensionless" description="">0.0</lineage>
-                <mutations conserved="false" units="dimensionless" description="">0</mutations>
-
-                <apoptosis_rate conserved="false" units="dimensionless" description="">1e-03</apoptosis_rate>
-
             </custom_data>
         </cell_definition>
     </cell_definitions>
@@ -275,16 +243,12 @@
     <initial_conditions>
         <cell_positions enabled="true" type="csv">
             <folder>./config</folder>
-            <filename>posiciones_1cell.csv</filename>
+            <filename>cells.csv</filename>
         </cell_positions>
     </initial_conditions>
 
     <user_parameters>
         <random_seed type="int" units="dimensionless" description="">0</random_seed>
-        <node_to_visualize type="string" units="" description="">S_entry</node_to_visualize>
-        <mutation_rate_threshold type="double" units="" description="">0.02</mutation_rate_threshold>
-        <plk1_rate_mutation_probability type="double" units="" description="">0.5</plk1_rate_mutation_probability>
-        <plk1_rate_effect_size type="double" units="" description="">0.05</plk1_rate_effect_size>
-        <plk1_rate_mutation_target type="string" units="" description="">down</plk1_rate_mutation_target>
+        <node_to_visualize type="string" units="" description="">C</node_to_visualize>
     </user_parameters>
 </PhysiCell_settings>

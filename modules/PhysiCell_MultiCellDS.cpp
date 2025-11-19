@@ -1023,6 +1023,9 @@ void add_PhysiCell_cells_to_open_xml_pugi_v2( pugi::xml_document& xml_dom, std::
 	
 	
 	// mutations
+		double mutation_count = static_cast<double>( pCell->custom_data.mutations.size() );
+		std::fwrite( &( mutation_count ) , sizeof(double) , 1 , fp );
+
 		// custom vector variables - time, ID, celltype, parent_ID, generation
 		file_mut << PhysiCell_globals.current_time << "," << pCell->ID << "," << pCell->type << "," << pCell->parent_ID << "," << pCell->generation << ",";
 		std::string buffer = "";

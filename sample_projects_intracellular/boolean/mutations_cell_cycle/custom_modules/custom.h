@@ -97,7 +97,7 @@ void update_cell_from_boolean_model(Cell* pCell, Phenotype& phenotype, double dt
 
 // Helper functions for Boolean network-based cell cycle control
 bool check_boolean_network_quiescence( Cell* pCell );
-bool check_boolean_network_apoptosis( Cell* pCell );
+bool check_boolean_network_apoptosis( Cell* pCell, double dt );
 bool check_cyclin_transition_readiness( Cell* pCell, const std::string& target_phase );
 
 // Custom cell cycle phase entry functions for Flow Cytometry model
@@ -106,7 +106,16 @@ void custom_S_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt
 void custom_G2_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt );
 void custom_M_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt );
 
+// Arrest functions to prevent transitions when conditions aren't met
+bool arrest_G0G1_to_S( Cell* pCell, Phenotype& phenotype, double dt );
+bool arrest_S_to_G2( Cell* pCell, Phenotype& phenotype, double dt );
+bool arrest_G2_to_M( Cell* pCell, Phenotype& phenotype, double dt );
+bool arrest_M_to_G0G1( Cell* pCell, Phenotype& phenotype, double dt );
+
 // Growth factor Boolean network update function
 void update_gf_boolean_nodes( Cell* pCell );
+
+// Custom cell division function to reset Boolean model to initial state
+void custom_cell_division_function( Cell* parent, Cell* child );
 
 #endif

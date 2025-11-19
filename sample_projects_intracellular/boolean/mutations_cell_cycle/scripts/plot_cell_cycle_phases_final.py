@@ -39,39 +39,34 @@ def analyze_cell_cycle_phases_pcdl_v4(output_dir):
         print("Loading simulation data with pcdl v4.0.5...")
         ts = TimeSeries(output_dir)
         
-        # Get available time points using the correct v4.0.5 API
-        time_points = []
+        # Retrieve available time steps from PCDL
         try:
-            # Method 1: Check if timesteps attribute exists
-            if hasattr(ts, 'timesteps'):
-                time_points = ts.timesteps
-                print(f"Found {len(time_points)} time steps using timesteps attribute")
-            # Method 2: Check if get_times method exists
-            elif hasattr(ts, 'get_times'):
-                time_points = ts.get_times()
-                print(f"Found {len(time_points)} time steps using get_times method")
-            # Method 3: Try to get from l_mcds (list of mcds objects)
-            elif hasattr(ts, 'l_mcds') and ts.l_mcds:
-                time_points = [mcds.time for mcds in ts.l_mcds]
-                print(f"Found {len(time_points)} time steps using l_mcds")
-            else:
-                print("Could not determine time points from TimeSeries object")
-                return None, None
+            mcds_list = ts.get_mcds_list()
         except Exception as e:
-            print(f"Error getting time points: {e}")
+            print(f"Error loading MultiCellDS time steps: {e}")
             return None, None
+
+        if not mcds_list:
+            print("No MultiCellDS snapshots found in the output directory.")
+            return None, None
+
+        time_points = [float(step.get_time()) for step in mcds_list]
+        print(f"Found {len(time_points)} time steps via TimeSeries.get_mcds_list()")
         
         # Initialize data structures
         phase_counts = {}
         valid_time_points = []
         
-        # Process each time point
-        for timestep in time_points:
+        # Process each time point, sorted by time while preserving duplicate ordering
+        sorted_indices = sorted(range(len(time_points)), key=lambda i: time_points[i])
+        for idx in sorted_indices:
+            timestep = time_points[idx]
+            timestep_data = mcds_list[idx]
             try:
                 print(f"Processing time step {timestep}...")
                 
-                # Get cell data using the correct v4.0.5 API
-                cell_df = ts.get_cell_df(timestep)
+                # Get cell data from the TimeStep object
+                cell_df = timestep_data.get_cell_df()
                 
                 if cell_df.empty:
                     print(f"  No cell data found at time step {timestep}")
@@ -173,7 +168,7 @@ def plot_phase_distribution(phase_counts, time_points, output_path):
                    markersize=4)
     
     # Formatting
-    ax.set_xlabel('Time (hours)', fontsize=12)
+    ax.set_xlabel('Time (minutes)', fontsize=12)
     ax.set_ylabel('Number of Cells', fontsize=12)
     if 'total_cells' in all_phases and len(all_phases) == 1:
         ax.set_title('Total Cell Population Over Time', fontsize=14)
@@ -230,7 +225,7 @@ def plot_phase_percentages(phase_counts, time_points, output_path):
                 alpha=0.7)
     
     # Formatting
-    ax.set_xlabel('Time (hours)', fontsize=12)
+    ax.set_xlabel('Time (minutes)', fontsize=12)
     ax.set_ylabel('Percentage of Cells (%)', fontsize=12)
     ax.set_title('Cell Cycle Phase Distribution Over Time (Percentages)', fontsize=14)
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')

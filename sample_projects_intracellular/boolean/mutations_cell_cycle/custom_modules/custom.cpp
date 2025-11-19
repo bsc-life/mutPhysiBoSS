@@ -68,6 +68,8 @@
 #include "custom.h"
 #include "../BioFVM/BioFVM.h"  
 #include "../addons/PhysiBoSS/src/maboss_intracellular.h"
+#include <algorithm>
+#include <cctype>
 using namespace BioFVM;
 
 // declare cell definitions here 
@@ -98,16 +100,25 @@ void create_cell_types( void )
 	cell_defaults.functions.update_migration_bias = NULL; 
 	cell_defaults.functions.pre_update_intracellular = pre_update_intracellular; 
 	cell_defaults.functions.post_update_intracellular = post_update_intracellular; 
-	cell_defaults.functions.custom_cell_rule = NULL; 
+	cell_defaults.functions.custom_cell_rule = NULL;
+	cell_defaults.functions.cell_division_function = custom_cell_division_function; 
 	
 	cell_defaults.functions.add_cell_basement_membrane_interactions = NULL; 
 	cell_defaults.functions.calculate_distance_to_membrane = NULL; 
 	
 	cell_defaults.custom_data.add_variable(parameters.strings("node_to_visualize"), "dimensionless", 0.0 ); //for paraview visualization
 	
+	// Add PLK1 node state tracking for debugging and analysis
+	cell_defaults.custom_data.add_variable("Plk1", "dimensionless", 0.0);
+	
+	// Add entry node state tracking for debugging
+	cell_defaults.custom_data.add_variable("S_entry", "dimensionless", 0.0);
+	cell_defaults.custom_data.add_variable("G2M_entry", "dimensionless", 0.0);
+	cell_defaults.custom_data.add_variable("G0G1_entry", "dimensionless", 0.0);
+	
 	// Add apoptosis timer variables
 	cell_defaults.custom_data.add_variable("apoptosis_commitment", "dimensionless", 0.0);
-	cell_defaults.custom_data.add_variable("apoptosis_threshold", "dimensionless", 10.0);
+	cell_defaults.custom_data.add_variable("apoptosis_threshold", "dimensionless", 100.0);
 
 	/*
 	   This parses the cell definitions in the XML config file. 
@@ -151,8 +162,31 @@ void create_cell_types( void )
                     cycle_model->phases[G2_index].entry_function = custom_G2_phase_entry_function;
                 if (M_index >= 0)
                     cycle_model->phases[M_index].entry_function = custom_M_phase_entry_function;
+
+                // Assign arrest functions to prevent transitions when conditions aren't met
+                if (G0G1_index >= 0 && S_index >= 0)
+                    cycle_model->phase_link(G0G1_index, S_index).arrest_function = arrest_G0G1_to_S;
+                if (S_index >= 0 && G2_index >= 0)
+                    cycle_model->phase_link(S_index, G2_index).arrest_function = arrest_S_to_G2;
+                if (G2_index >= 0 && M_index >= 0)
+                    cycle_model->phase_link(G2_index, M_index).arrest_function = arrest_G2_to_M;
+                if (M_index >= 0 && G0G1_index >= 0)
+                {
+                    cycle_model->phase_link(M_index, G0G1_index).arrest_function = arrest_M_to_G0G1;
+                    cycle_model->phase_link(M_index, G0G1_index).exit_function = phase_exit_mutation_function;
+                }
                 
-                std::cout << "Applied custom phase entry functions to " << cell_type << " cells (Flow Cytometry model)." << std::endl;
+                std::cout << "Configured flow-cytometry separated cycle customizations for " << cell_type << " cells." << std::endl;
+            }
+            else if (cycle_model->code == PhysiCell_constants::flow_cytometry_cycle_model)
+            {
+                int G2M_index = cycle_model->find_phase_index(PhysiCell_constants::G2M_phase);
+                int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
+                if (G2M_index >= 0 && G0G1_index >= 0)
+                {
+                    cycle_model->phase_link(G2M_index, G0G1_index).exit_function = phase_exit_mutation_function;
+                    std::cout << "Applied mutation exit function to " << cell_type << " cells (Flow Cytometry basic)." << std::endl;
+                }
             }
             else
             {
@@ -233,10 +267,22 @@ void pre_update_intracellular( Cell* pCell, Phenotype& phenotype, double dt )
 void post_update_intracellular( Cell* pCell, Phenotype& phenotype, double dt )
 {
 	color_node(pCell);
+	
+	// Track PLK1 node state for debugging and analysis
+	if (pCell->phenotype.intracellular &&
+		pCell->phenotype.intracellular->intracellular_type == "maboss")
+	{
+		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
+		if (maboss_model->maboss.has_node("Plk1"))
+		{
+			bool plk1_state = maboss_model->maboss.get_node_value("Plk1");
+			pCell->custom_data["Plk1"] = plk1_state ? 1.0 : 0.0;
+		}
+	}
 
-	std::cout << "Cell " << pCell->ID << " generation " << pCell->generation << " parent " << pCell->parent_ID << std::endl;
+	// std::cout << "Cell " << pCell->ID << " generation " << pCell->generation << " parent " << pCell->parent_ID << std::endl;
 
-	// Decay apoptosis commitment if no caspase signals are active
+	// Update apoptosis rate based on caspase activity and commitment
 	if (pCell->phenotype.intracellular &&
 		pCell->phenotype.intracellular->intracellular_type == "maboss")
 	{
@@ -245,10 +291,54 @@ void post_update_intracellular( Cell* pCell, Phenotype& phenotype, double dt )
 		bool Casp8 = maboss_model->maboss.get_node_value("Casp8");
 		bool Casp9 = maboss_model->maboss.get_node_value("Casp9");
 		
-		// Only decay if no caspase signals are active
-		if (!Casp3 && !Casp8 && !Casp9)
+		// Get apoptosis rate index
+		int apoptosis_index = phenotype.death.find_death_model_index(PhysiCell_constants::apoptosis_death_model);
+		
+		// Get apoptosis commitment
+		double& apoptosis_commitment = pCell->custom_data["apoptosis_commitment"];
+		double apoptosis_threshold = pCell->custom_data["apoptosis_threshold"];
+		
+		// If any caspase is active, increase apoptosis commitment
+		if (Casp3 || Casp8 || Casp9)
 		{
+			// Increase commitment at a rate of 0.1 per minute (scaled by dt)
+			double commitment_rate = 0.1; // per minute
+			apoptosis_commitment += commitment_rate * dt;
+			
+			// Calculate apoptosis rate based on commitment level
+			// Base rate when caspases are active
+			double base_apoptosis_rate = 1e-6; // Very low base rate
+			
+			// Scale apoptosis rate with commitment level
+			// The longer caspases are active, the higher the rate
+			// Rate increases linearly with commitment up to a maximum
+			double max_apoptosis_rate = 0.01; // Maximum rate (1/min)
+			double commitment_factor = apoptosis_commitment / apoptosis_threshold; // 0 to 1+
+			commitment_factor = std::min(commitment_factor, 1.0); // Cap at 1.0
+			
+			// Linear scaling: rate = base + (max - base) * commitment_factor
+			double apoptosis_rate = base_apoptosis_rate + (max_apoptosis_rate - base_apoptosis_rate) * commitment_factor;
+			
+			// Set the apoptosis rate
+			phenotype.death.rates[apoptosis_index] = apoptosis_rate;
+			
+			// Only print occasionally to avoid spam
+			static int print_counter = 0;
+			if (print_counter % 100 == 0)
+			{
+				std::cout << "Cell " << pCell->ID << " apoptosis commitment: " << apoptosis_commitment 
+						  << "/" << apoptosis_threshold << ", apoptosis rate: " << apoptosis_rate << " 1/min" << std::endl;
+			}
+			print_counter++;
+		}
+		else
+		{
+			// No caspases active - decay commitment and reduce apoptosis rate
 			pCell->custom_data["apoptosis_commitment"] *= 0.95; // 5% decay per time step
+			
+			// Set very low apoptosis rate when caspases are not active
+			double base_apoptosis_rate = 1e-6;
+			phenotype.death.rates[apoptosis_index] = base_apoptosis_rate;
 		}
 	}
 
@@ -311,6 +401,19 @@ std::vector<std::string> my_coloring_function( Cell* pCell )
 void color_node(Cell* pCell){
 	std::string node_name = parameters.strings("node_to_visualize");
 	pCell->custom_data[node_name] = pCell->phenotype.intracellular->get_boolean_variable_value(node_name);
+	
+	// Track entry node states for debugging
+	if (pCell->phenotype.intracellular &&
+		pCell->phenotype.intracellular->intracellular_type == "maboss")
+	{
+		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
+		if (maboss_model->maboss.has_node("S_entry"))
+			pCell->custom_data["S_entry"] = maboss_model->maboss.get_node_value("S_entry") ? 1.0 : 0.0;
+		if (maboss_model->maboss.has_node("G2M_entry"))
+			pCell->custom_data["G2M_entry"] = maboss_model->maboss.get_node_value("G2M_entry") ? 1.0 : 0.0;
+		if (maboss_model->maboss.has_node("G0G1_entry"))
+			pCell->custom_data["G0G1_entry"] = maboss_model->maboss.get_node_value("G0G1_entry") ? 1.0 : 0.0;
+	}
 }
 
 void wt_phenotype( Cell* pCell, Phenotype& phenotype, double dt )
@@ -351,6 +454,9 @@ void phase_exit_mutation_function( Cell* pCell, Phenotype& phenotype, double dt 
 
 	// Choose a random node
 	static std::default_random_engine generator;
+	static bool plk1_node_missing_reported = false;
+	static bool plk1_target_warning_reported = false;
+	static bool plk1_effect_warning_reported = false;
     
 	
 	// Only proceed if the cell has a MaBoSS model
@@ -386,7 +492,78 @@ void phase_exit_mutation_function( Cell* pCell, Phenotype& phenotype, double dt 
 
 				}
 			}
-
+			
+			double plk1_rate_mut_prob = parameters.doubles("plk1_rate_mutation_probability");
+			if (plk1_rate_mut_prob > 0.0 && uniform_random() < plk1_rate_mut_prob)
+			{
+				const std::string plk1_node_name = "Plk1";
+				if (!maboss_model->maboss.has_node(plk1_node_name))
+				{
+					if (!plk1_node_missing_reported)
+					{
+						std::cout << "Warning: Plk1 node not found in MaBoSS model; skipping PLK1 rate mutation." << std::endl;
+						plk1_node_missing_reported = true;
+					}
+				}
+				else
+				{
+					std::string target = parameters.strings("plk1_rate_mutation_target");
+					std::string target_lower = target;
+					std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(),
+						[](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+					
+					const char* rate_symbol_cstr = nullptr;
+					if (target_lower == "up" || target_lower == "activation" || target_lower == "rate_up")
+					{
+						rate_symbol_cstr = "$u_Plk1";
+					}
+					else if (target_lower == "down" || target_lower == "inhibition" || target_lower == "rate_down")
+					{
+						rate_symbol_cstr = "$d_Plk1";
+					}
+					else
+					{
+						if (!plk1_target_warning_reported)
+						{
+							std::cout << "Warning: Unsupported plk1_rate_mutation_target '" << target
+									  << "'. Expected 'up' or 'down'. Defaulting to 'down'." << std::endl;
+							plk1_target_warning_reported = true;
+						}
+						rate_symbol_cstr = "$d_Plk1";
+					}
+					
+					double effect_size = parameters.doubles("plk1_rate_effect_size");
+					if (effect_size < 0.0)
+					{
+						if (!plk1_effect_warning_reported)
+						{
+							std::cout << "Warning: plk1_rate_effect_size is negative; clamping to 0." << std::endl;
+							plk1_effect_warning_reported = true;
+						}
+						effect_size = 0.0;
+					}
+					
+					std::string rate_symbol(rate_symbol_cstr);
+					double current_rate = maboss_model->maboss.get_parameter_value(rate_symbol);
+					// Use ADDITIVE effect instead of multiplicative to avoid exponential explosion
+					// new_rate = current_rate + effect_size (additive)
+					// This provides controlled, linear growth instead of exponential
+					double new_rate = current_rate + effect_size;
+					maboss_model->maboss.set_parameter_value(rate_symbol, new_rate);
+					
+					// Debug output to verify rate changes
+					std::cout << "Cell " << pCell->ID << " (gen " << pCell->generation << "): "
+							  << "PLK1 rate mutation - " << rate_symbol 
+							  << " changed from " << current_rate 
+							  << " to " << new_rate 
+							  << " (additive effect=" << effect_size << ")" << std::endl;
+					
+					std::string mutation_record = "Plk1_rate_" + std::string(rate_symbol == "$u_Plk1" ? "up" : "down")
+						+ "_" + std::to_string(effect_size);
+					pCell->custom_data.mutations.push_back(mutation_record);
+				}
+			}
+			
         }
         else
         {
@@ -450,7 +627,7 @@ bool check_boolean_network_quiescence( Cell* pCell )
 }
 
 // Helper function to check if cell should enter apoptosis
-bool check_boolean_network_apoptosis( Cell* pCell )
+bool check_boolean_network_apoptosis( Cell* pCell, double dt )
 {
 	// Only proceed if the cell has a MaBoSS model
 	if (pCell->phenotype.intracellular &&
@@ -468,10 +645,24 @@ bool check_boolean_network_apoptosis( Cell* pCell )
 		double apoptosis_threshold = pCell->custom_data["apoptosis_threshold"];
 
 		// If any caspase is active, increase apoptosis commitment
+		// Use a rate-based approach: commitment increases at a rate per minute
+		// Typical apoptosis commitment takes 30-60 minutes, so use a rate of ~0.1-0.2 per minute
 		if (Casp3 || Casp8 || Casp9)
 		{
-			apoptosis_commitment += 1.0; // Increase commitment by 1 each time step
-			std::cout << "Cell " << pCell->ID << " apoptosis commitment: " << apoptosis_commitment << "/" << apoptosis_threshold << std::endl;
+			// Increase commitment at a rate of 0.1 per minute (scaled by dt)
+			// This means it takes ~100 minutes to reach threshold of 10.0
+			// Adjust the rate (0.1) to make it faster or slower as needed
+			double commitment_rate = 0.1; // per minute
+			apoptosis_commitment += commitment_rate * dt;
+			
+			// Only print occasionally to avoid spam
+			static int print_counter = 0;
+			if (print_counter % 100 == 0)
+			{
+				std::cout << "Cell " << pCell->ID << " apoptosis commitment: " << apoptosis_commitment 
+						  << "/" << apoptosis_threshold << " (rate: " << commitment_rate << "/min)" << std::endl;
+			}
+			print_counter++;
 		}
 
 		// Only trigger apoptosis if commitment exceeds threshold
@@ -525,229 +716,149 @@ bool check_cyclin_transition_readiness( Cell* pCell, const std::string& target_p
 	return false;
 }
 
-// G0/G1 phase entry function - handles quiescence based on Boolean network
-void custom_G0G1_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
+// Arrest function: Prevent G0/G1 -> S transition if conditions aren't met
+bool arrest_G0G1_to_S( Cell* pCell, Phenotype& phenotype, double dt )
 {
-	// Check for apoptosis first - if apoptosis is active, cell should not cycle
-	if (check_boolean_network_apoptosis(pCell))
-	{
-		std::cout << "Cell " << pCell->ID << " entering G0/G1 phase but apoptosis is active - cell will remain quiescent" << std::endl;
-		
-		// Set very low transition rates to keep cell in G0/G1
-		Cycle_Model* cycle_model = &(phenotype.cycle.model());
-		int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-		int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-		cycle_model->transition_rate(G0G1_index, S_index) = 0.00001; // Very low rate
-		return;
-	}
-	
-	// Check if the Boolean network indicates quiescence based on cyclin levels
+	// Check quiescence
 	if (check_boolean_network_quiescence(pCell))
 	{
-		std::cout << "Cell " << pCell->ID << " entering quiescent G0/G1 phase - low cyclin levels" << std::endl;
-		
-		// Reduce transition rate from G0/G1 to S phase when quiescent
-		Cycle_Model* cycle_model = &(phenotype.cycle.model());
-		int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-		int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-		cycle_model->transition_rate(G0G1_index, S_index) = 0.0001; // Very low rate
+		static int debug_counter = 0;
+		if (debug_counter % 100 == 0)
+		{
+			std::cout << "Cell " << pCell->ID << " arrested G0G1->S: quiescent" << std::endl;
+		}
+		debug_counter++;
+		return true; // Arrest transition
 	}
-	else
+	
+	// Get Boolean network entry nodes and cyclin levels
+	bool S_entry_node = false;
+	bool cyclins_ready = false;
+	
+	if (pCell->phenotype.intracellular &&
+		pCell->phenotype.intracellular->intracellular_type == "maboss")
 	{
-		// Check if cell is ready to transition to S phase based on cyclins
-		if (check_cyclin_transition_readiness(pCell, "S"))
+		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
+		S_entry_node = maboss_model->maboss.get_node_value("S_entry");
+		cyclins_ready = check_cyclin_transition_readiness(pCell, "S");
+		
+		// Debug output occasionally
+		static int debug_counter2 = 0;
+		if (debug_counter2 % 100 == 0 && !S_entry_node)
 		{
-			std::cout << "Cell " << pCell->ID << " entering active G0/G1 phase - cyclins ready for S phase" << std::endl;
-			
-			// Normal transition rate from G0/G1 to S phase
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-			int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-			cycle_model->transition_rate(G0G1_index, S_index) = 0.00324; // Normal rate
+			std::cout << "Cell " << pCell->ID << " arrested G0G1->S: S_entry=" << (S_entry_node ? "ON" : "OFF") 
+					  << ", cyclins_ready=" << (cyclins_ready ? "YES" : "NO") << std::endl;
 		}
-		else
-		{
-			std::cout << "Cell " << pCell->ID << " entering G0/G1 phase - waiting for cyclin activation" << std::endl;
-			
-			// Reduced transition rate - waiting for cyclins
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-			int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-			cycle_model->transition_rate(G0G1_index, S_index) = 0.0005; // Reduced rate
-		}
+		debug_counter2++;
 	}
+	
+	// Only allow transition if BOTH S_entry node is ON AND cyclins are ready
+	if (S_entry_node && cyclins_ready)
+	{
+		return false; // Don't arrest - allow transition
+	}
+	
+	return true; // Arrest transition - conditions not met
 }
 
-// S phase entry function - DNA synthesis phase
+// G0/G1 phase entry function - simplified to just log entry
+void custom_G0G1_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
+{
+	std::cout << "Cell " << pCell->ID << " entering G0/G1 phase" << std::endl;
+}
+
+// Arrest function: Prevent S -> G2 transition if conditions aren't met
+bool arrest_S_to_G2( Cell* pCell, Phenotype& phenotype, double dt )
+{
+	// Get Boolean network entry nodes and cyclin levels
+	bool G2M_entry_node = false;
+	bool CyclinA = false;
+	
+	if (pCell->phenotype.intracellular &&
+		pCell->phenotype.intracellular->intracellular_type == "maboss")
+	{
+		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
+		G2M_entry_node = maboss_model->maboss.get_node_value("G2M_entry");
+		CyclinA = maboss_model->maboss.get_node_value("CyclinA");
+	}
+	
+	// Only allow transition if BOTH G2M_entry node is ON AND CyclinA is active
+	if (G2M_entry_node && CyclinA)
+	{
+		return false; // Don't arrest - allow transition
+	}
+	
+	return true; // Arrest transition - conditions not met
+}
+
+// S phase entry function - simplified to just log entry
 void custom_S_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
 {
-	// Check for apoptosis first
-	if (check_boolean_network_apoptosis(pCell))
-	{
-		std::cout << "Cell " << pCell->ID << " entering S phase but apoptosis is active - cell will remain in S phase" << std::endl;
-		
-		// Set very low transition rate to G2
-		Cycle_Model* cycle_model = &(phenotype.cycle.model());
-		int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-		int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-		cycle_model->transition_rate(S_index, G2_index) = 0.00001; // Very low rate
-		return;
-	}
-	
 	std::cout << "Cell " << pCell->ID << " entering S phase (DNA synthesis)" << std::endl;
+}
+
+// Arrest function: Prevent G2 -> M transition if conditions aren't met
+bool arrest_G2_to_M( Cell* pCell, Phenotype& phenotype, double dt )
+{
+	// Get Boolean network entry nodes and cyclin levels
+	bool G2M_entry_node = false;
+	bool CyclinB = false;
+	bool cyclins_ready_M = false;
 	
-	// Check cyclin levels for S phase progression
 	if (pCell->phenotype.intracellular &&
 		pCell->phenotype.intracellular->intracellular_type == "maboss")
 	{
 		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
-		bool CyclinA = maboss_model->maboss.get_node_value("CyclinA");
-		bool CyclinE = maboss_model->maboss.get_node_value("CyclinE");
-		
-		if (CyclinA)
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinA is active during S phase - ready for G2 transition" << std::endl;
-			
-			// Normal transition rate to G2
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			cycle_model->transition_rate(S_index, G2_index) = 0.00208; // Normal rate
-		}
-		else if (CyclinE)
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinE is active during S phase - early S phase" << std::endl;
-			
-			// Reduced transition rate - still in early S phase
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			cycle_model->transition_rate(S_index, G2_index) = 0.001; // Reduced rate
-		}
-		else
-		{
-			std::cout << "Cell " << pCell->ID << " No cyclins active during S phase - waiting for CyclinA" << std::endl;
-			
-			// Very low transition rate - waiting for CyclinA
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int S_index = cycle_model->find_phase_index(PhysiCell_constants::S_phase);
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			cycle_model->transition_rate(S_index, G2_index) = 0.0002; // Very low rate
-		}
+		G2M_entry_node = maboss_model->maboss.get_node_value("G2M_entry");
+		CyclinB = maboss_model->maboss.get_node_value("CyclinB");
+		cyclins_ready_M = check_cyclin_transition_readiness(pCell, "M");
 	}
 	
-	// Standard S phase behavior - double nuclear volume
-	// This is already handled by the standard S_phase_entry_function in PhysiCell
+	// Only allow transition if G2M_entry node is ON AND CyclinB is active AND cyclins are ready
+	if (G2M_entry_node && CyclinB && cyclins_ready_M)
+	{
+		return false; // Don't arrest - allow transition
+	}
+	
+	return true; // Arrest transition - conditions not met
 }
 
-// G2 phase entry function - Gap 2 phase
+// G2 phase entry function - simplified to just log entry
 void custom_G2_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
 {
-	// Check for apoptosis first
-	if (check_boolean_network_apoptosis(pCell))
-	{
-		std::cout << "Cell " << pCell->ID << " entering G2 phase but apoptosis is active - cell will remain in G2 phase" << std::endl;
-		
-		// Set very low transition rate to M
-		Cycle_Model* cycle_model = &(phenotype.cycle.model());
-		int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-		int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-		cycle_model->transition_rate(G2_index, M_index) = 0.00001; // Very low rate
-		return;
-	}
-	
 	std::cout << "Cell " << pCell->ID << " entering G2 phase" << std::endl;
-	
-	// Check cyclin levels for G2 phase progression
-	if (pCell->phenotype.intracellular &&
-		pCell->phenotype.intracellular->intracellular_type == "maboss")
-	{
-		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
-		bool CyclinB = maboss_model->maboss.get_node_value("CyclinB");
-		bool CyclinA = maboss_model->maboss.get_node_value("CyclinA");
-		
-		if (CyclinB)
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinB is active during G2 phase - ready for mitosis" << std::endl;
-			
-			// Normal transition rate to M phase
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-			cycle_model->transition_rate(G2_index, M_index) = 0.00417; // Normal rate
-		}
-		else if (CyclinA)
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinA is active during G2 phase - early G2 phase" << std::endl;
-			
-			// Reduced transition rate - still in early G2 phase
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-			cycle_model->transition_rate(G2_index, M_index) = 0.002; // Reduced rate
-		}
-		else
-		{
-			std::cout << "Cell " << pCell->ID << " No cyclins active during G2 phase - waiting for CyclinB" << std::endl;
-			
-			// Very low transition rate - waiting for CyclinB
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int G2_index = cycle_model->find_phase_index(PhysiCell_constants::G2_phase);
-			int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-			cycle_model->transition_rate(G2_index, M_index) = 0.0003; // Very low rate
-		}
-	}
 }
 
-// M phase entry function - Mitosis phase
-void custom_M_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
+// Arrest function: Prevent M -> G0/G1 transition if conditions aren't met
+bool arrest_M_to_G0G1( Cell* pCell, Phenotype& phenotype, double dt )
 {
-	// Check for apoptosis first
-	if (check_boolean_network_apoptosis(pCell))
-	{
-		std::cout << "Cell " << pCell->ID << " entering M phase but apoptosis is active - cell will remain in M phase" << std::endl;
-		
-		// Set very low transition rate back to G0/G1
-		Cycle_Model* cycle_model = &(phenotype.cycle.model());
-		int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-		int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-		cycle_model->transition_rate(M_index, G0G1_index) = 0.00001; // Very low rate
-		return;
-	}
+	// Get Boolean network entry nodes and cyclin levels
+	bool G0G1_entry_node = false;
+	bool CyclinB = false;
+	bool cyclins_ready_G0G1 = false;
 	
-	std::cout << "Cell " << pCell->ID << " entering M phase (mitosis)" << std::endl;
-	
-	// Check cyclin levels for mitosis progression
 	if (pCell->phenotype.intracellular &&
 		pCell->phenotype.intracellular->intracellular_type == "maboss")
 	{
 		MaBoSSIntracellular* maboss_model = static_cast<MaBoSSIntracellular*>(pCell->phenotype.intracellular);
-		bool CyclinB = maboss_model->maboss.get_node_value("CyclinB");
-		
-		if (CyclinB)
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinB is active during M phase - mitosis in progress" << std::endl;
-			
-			// Normal transition rate back to G0/G1 (mitosis completion)
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-			int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-			cycle_model->transition_rate(M_index, G0G1_index) = 0.01667; // Normal rate
-		}
-		else
-		{
-			std::cout << "Cell " << pCell->ID << " CyclinB is low during M phase - mitosis completion" << std::endl;
-			
-			// Higher transition rate - mitosis is completing
-			Cycle_Model* cycle_model = &(phenotype.cycle.model());
-			int M_index = cycle_model->find_phase_index(PhysiCell_constants::M_phase);
-			int G0G1_index = cycle_model->find_phase_index(PhysiCell_constants::G0G1_phase);
-			cycle_model->transition_rate(M_index, G0G1_index) = 0.05; // Higher rate
-		}
+		G0G1_entry_node = maboss_model->maboss.get_node_value("G0G1_entry");
+		CyclinB = maboss_model->maboss.get_node_value("CyclinB");
+		cyclins_ready_G0G1 = check_cyclin_transition_readiness(pCell, "G0G1");
 	}
 	
-	// Division will occur at the exit of this phase
-	// This is handled automatically by PhysiCell
+	// Allow transition if CyclinB is low (mitosis completing) AND (G0G1_entry ON OR cyclins ready)
+	if (!CyclinB && (G0G1_entry_node || cyclins_ready_G0G1))
+	{
+		return false; // Don't arrest - allow transition
+	}
+	
+	return true; // Arrest transition - conditions not met
+}
+
+// M phase entry function - simplified to just log entry
+void custom_M_phase_entry_function( Cell* pCell, Phenotype& phenotype, double dt )
+{
+	std::cout << "Cell " << pCell->ID << " entering M phase (mitosis)" << std::endl;
 }
 
 void update_gf_boolean_nodes( Cell* pCell )
@@ -760,7 +871,8 @@ void update_gf_boolean_nodes( Cell* pCell )
 		
 		// Get the internalized GF concentration
 		// GF is substrate ID 2 (oxygen=0, drug=1, GF=2)
-		double gf_concentration = pCell->phenotype.molecular.internalized_total_substrates[2];
+		double gf_concentration = pCell->nearest_density_vector()[microenvironment.find_density_index("GF")];
+		// std::cout << "Cell " << pCell->ID << " GF concentration: " << gf_concentration << " mM" << std::endl;
 		
 		// Thresholds for GF activation
 		double gf_threshold = 0.25;      // 0.25 mM to activate GF
@@ -801,5 +913,30 @@ void update_gf_boolean_nodes( Cell* pCell )
 				std::cout << "Cell " << pCell->ID << " deactivated GF_High node (concentration: " << gf_concentration << " mM)" << std::endl;
 			}
 		}
+	}
+}
+
+// Custom cell division function to reset Boolean model to initial state (t=0)
+void custom_cell_division_function( Cell* parent, Cell* child )
+{
+	// Reset the child cell's Boolean model to initial state (t=0)
+	// This ensures each daughter cell starts fresh, regardless of inheritance settings
+	if (child->phenotype.intracellular &&
+		child->phenotype.intracellular->intracellular_type == "maboss")
+	{
+		MaBoSSIntracellular* child_maboss = static_cast<MaBoSSIntracellular*>(child->phenotype.intracellular);
+		
+		// Reset the Boolean model to initial state
+		// This calls restart_node_values() which resets all nodes to their initial values
+		child_maboss->start();
+		
+		// After reset, restore GF and GF_High nodes based on current concentration
+		// This is important because resetting the model may have turned them OFF
+		update_gf_boolean_nodes(child);
+		
+		// Also reset apoptosis commitment for the new cell
+		child->custom_data["apoptosis_commitment"] = 0.0;
+		
+		std::cout << "Cell " << child->ID << " (daughter of " << parent->ID << "): Boolean model reset to initial state (t=0), GF nodes restored" << std::endl;
 	}
 }
